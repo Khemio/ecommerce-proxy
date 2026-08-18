@@ -10,9 +10,6 @@ import (
 	// shopify "github.com/r0busta/go-shopify-graphql/v9"
 )
 
-var storeName = "test-store-ft9adler"
-var adminToken = "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"
-var strorefrontToken = "382fc1bd63be2d32674b74bfc126cc18"
 var version = "2026-07"
 
 func main() {
