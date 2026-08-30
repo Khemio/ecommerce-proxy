@@ -1,12 +1,14 @@
-FROM golang:1.23-alpine AS builder
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /app/server .
+ARG GO_VERSION=1
+FROM golang:${GO_VERSION}-bookworm as builder
 
-FROM scratch
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /app/server /server
-EXPOSE 8080
-ENTRYPOINT ["/server"]   
+WORKDIR /usr/src/app
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+COPY . .
+RUN go build -v -o /run-app .
+
+
+FROM debian:bookworm
+
+COPY --from=builder /run-app /usr/local/bin/
+CMD ["run-app"]
