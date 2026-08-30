@@ -16,9 +16,9 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		Port:                   GetEnv("SERVER_PORT", "8080"),
 		Environment:            GetEnv("ENV", "dev"),
 		APIVersion:             GetEnv("SHOPIFY_API_VERSION", version),
-		ShopifyDomain:          GetEnv("SHOPIFY_STORE_NAME", storeName),
-		ShopifyAdminToken:      GetEnv("SHOPIFY_ADMIN_TOKEN", adminToken),
-		ShopifyStorefrontToken: GetEnv("SHOPIFY_STOREFRONT_TOKEN", strorefrontToken),
+		ShopifyDomain:          GetEnv("SHOPIFY_STORE_NAME", "test-store"),
+		ShopifyAdminToken:      GetEnv("SHOPIFY_ADMIN_TOKEN", "admin-tocken"),
+		ShopifyStorefrontToken: GetEnv("SHOPIFY_STOREFRONT_TOKEN", "store-front-token"),
 	}
 	cfg.AdminEndpoint = fmt.Sprintf("https://%s.myshopify.com/admin/api/%s/graphql.json", cfg.ShopifyDomain, version)
 	cfg.StorefrontEndpoint = fmt.Sprintf("https://%s.myshopify.com/api/%s/graphql.json", cfg.ShopifyDomain, version)
