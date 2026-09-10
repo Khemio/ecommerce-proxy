@@ -2,6 +2,8 @@ package main
 
 import (
 	"log"
+	"sync"
+	"time"
 )
 
 // Config holds our operational backend environment variables
@@ -20,6 +22,22 @@ type Config struct {
 type MarketplaceServer struct {
 	config Config
 	logger *log.Logger
+
+	sessionsMu sync.RWMutex
+	sessions   map[string]*Session
+}
+
+type Session struct {
+	ClientID  string
+	CartToken string
+	CreatedAt time.Time
+
+	// Channel used to deliver webhook events to this client.
+	Events chan OrderEvent
+}
+
+type OrderEvent struct {
+	OrderID string `json:"orderId"`
 }
 
 type Item struct {

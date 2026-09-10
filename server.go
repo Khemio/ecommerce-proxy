@@ -11,7 +11,6 @@ import (
 func MakeServer() (*http.Server, *MarketplaceServer) {
 	logger := log.New(os.Stdout, "[MARKETPLACE-API] ", log.LstdFlags|log.Lshortfile)
 
-	// Inject credentials safely (Fallback to defaults for local development)
 	cfg := Config{
 		Port:                   GetEnv("SERVER_PORT", "8080"),
 		Environment:            GetEnv("ENV", "dev"),
@@ -28,6 +27,8 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 	server := &MarketplaceServer{
 		config: cfg,
 		logger: logger,
+
+		sessions: make(map[string]*Session),
 	}
 
 	// Multiplex routes cleanly using standard library features
@@ -36,6 +37,8 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 	mux.HandleFunc("GET /api/v1/products", server.HandleFetchVendorProducts)
 	mux.HandleFunc("GET /api/v1/product/{product_id}", server.HandleFetchVendorProduct)
 	mux.HandleFunc("POST /api/v1/checkout", server.HandleCheckout)
+	mux.HandleFunc("GET /api/v1/order", server.HandleOrderSSE)
+	mux.HandleFunc("POST /api/v1/shopify/webhook", server.HandleShopifyWebhook)
 
 	// corsHandler := CorsMiddleware()
 
@@ -45,7 +48,9 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		Handler:      LoggingMiddleware(logger)(CorsMiddleware(mux)),
 		WriteTimeout: 15 * time.Second,
 		ReadTimeout:  15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		// WriteTimeout: 0,
+		// ReadTimeout:  0,
+		IdleTimeout: 60 * time.Second,
 	}
 
 	return srv, server
