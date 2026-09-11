@@ -79,17 +79,25 @@ type ProductQueryResult struct {
 }
 
 type CheckoutResponse struct {
-	SessionId string `json:"sessionId"` //? not sure if this works
+	SessionId string `json:"sessionId"`
 	// Cart      CartResult `json:"cart"`
-	Id          string `json:"id"`
-	CheckoutUrl string `json:"checkoutUrl"`
-	Quantity    int    `json:"totalQuantity"`
+	Id          string              `json:"id"`
+	CheckoutUrl string              `json:"checkoutUrl"`
+	Quantity    int                 `json:"totalQuantity"`
+	Attributes  []map[string]string `json:"attributes"` //? Probably not necessary
 }
 
+// type CheckoutAttributes struct {
+
+// }
+
+// TODOD: Find a better way to parse attributes
 type CartResult struct {
-	Id          string `json:"id"`
-	CheckoutUrl string `json:"checkoutUrl"`
-	Quantity    int    `json:"totalQuantity"`
+	Id          string              `json:"id"`
+	CheckoutUrl string              `json:"checkoutUrl"`
+	Quantity    int                 `json:"totalQuantity"`
+	Attributes  []map[string]string `json:"attributes"`
+	// Attributes  CheckoutAttributes `json:"attributes"`
 }
 
 type CartCreateQueryResult struct {

@@ -84,21 +84,18 @@ func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Reques
 	fmt.Printf("Generated Session ID: %s\n", sessionID)
 
 	// Create Shopify cart.
-	// graphQLResp := CreateCartAndCheckout(
-	// 	&s.config,
-	// 	items,
-	// 	sessionID,
-	// )
-
-	graphQLResp := CreateCartAndCheckout(&s.config, items)
+	graphQLResp := CreateCartAndCheckout(
+		&s.config,
+		items,
+		sessionID,
+	)
 
 	cart := graphQLResp.Data.CartCreate.Cart
 	cartID := cart.Id
 	cartToken := extractToken(cartID)
 
 	session := &Session{
-		ID: sessionID,
-		// ClientID:  clientID,
+		ID:        sessionID,
 		CartToken: cartToken,
 
 		CreatedAt: time.Now(),
@@ -153,6 +150,7 @@ func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Reques
 		Id:          cart.Id,
 		CheckoutUrl: cart.CheckoutUrl,
 		Quantity:    cart.Quantity,
+		Attributes:  cart.Attributes, //? Probably not necessary
 	}
 
 	w.Header().Set("Content-Type", "application/json")

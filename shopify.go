@@ -136,18 +136,8 @@ func FetchProducts(config *Config, limit int) GraphQLResponse[QueryResult] {
 
 // POST /api/cart
 // TODO: Handle errors
-func CreateCartAndCheckout(config *Config, items []Item) GraphQLResponse[CheckoutQueryResult] {
-	// Parse input from mobile app
-	// 	[
-	// 	{
-	// 	  "variantId": "gid://shopify/ProductVariant/49042404180185",
-	// 	  "quantity": 1
-	// 	},
-	// 	{
-	// 	  "variantId": "gid://shopify/ProductVariant/49042403721433",
-	// 	  "quantity": 1
-	// 	}
-	// ]
+func CreateCartAndCheckout(
+	config *Config, items []Item, sessionID string) GraphQLResponse[CheckoutQueryResult] {
 
 	query := `
     mutation cartCreate($input: CartInput!) {
@@ -156,6 +146,10 @@ func CreateCartAndCheckout(config *Config, items []Item) GraphQLResponse[Checkou
                 id
                 checkoutUrl
                 totalQuantity
+				attributes {
+					key
+					value
+				}
             }
             userErrors {
                 field
@@ -177,6 +171,13 @@ func CreateCartAndCheckout(config *Config, items []Item) GraphQLResponse[Checkou
 	variables := map[string]any{
 		"input": map[string]any{
 			"lines": lines,
+
+			"attributes": []map[string]string{
+				{
+					"key":   "go_session_id",
+					"value": sessionID,
+				},
+			},
 		},
 	}
 
