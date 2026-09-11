@@ -18,6 +18,7 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		ShopifyDomain:          GetEnv("SHOPIFY_STORE_NAME", "test-store"),
 		ShopifyAdminToken:      GetEnv("SHOPIFY_ADMIN_TOKEN", "admin-tocken"),
 		ShopifyStorefrontToken: GetEnv("SHOPIFY_STOREFRONT_TOKEN", "store-front-token"),
+		ShopifySecretToken:     GetEnv("SHOPIFY_SECRET_TOKEN", "secret-token"),
 	}
 	cfg.AdminEndpoint = fmt.Sprintf("https://%s.myshopify.com/admin/api/%s/graphql.json", cfg.ShopifyDomain, version)
 	cfg.StorefrontEndpoint = fmt.Sprintf("https://%s.myshopify.com/api/%s/graphql.json", cfg.ShopifyDomain, version)
@@ -28,7 +29,8 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		config: cfg,
 		logger: logger,
 
-		sessions: make(map[string]*Session),
+		sessions:     make(map[string]*Session),
+		cartSessions: make(map[string]string), //? maybe not needed
 	}
 
 	// Multiplex routes cleanly using standard library features

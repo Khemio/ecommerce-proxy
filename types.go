@@ -16,6 +16,7 @@ type Config struct {
 	ShopifyStorefrontToken string
 	AdminEndpoint          string
 	StorefrontEndpoint     string
+	ShopifySecretToken     string
 }
 
 // MarketplaceServer wraps dependencies cleanly for our API endpoints
@@ -23,41 +24,46 @@ type MarketplaceServer struct {
 	config Config
 	logger *log.Logger
 
-	sessionsMu sync.RWMutex
-	sessions   map[string]*Session
+	sessionsMu   sync.RWMutex
+	sessions     map[string]*Session
+	cartSessions map[string]string //? maybe not needed
 }
 
 type Session struct {
-	ClientID  string
+	ID string
+	// ClientID  string
 	CartToken string
+
 	CreatedAt time.Time
 
-	// Channel used to deliver webhook events to this client.
+	// Events sent from the Shopify webhook handler
+	// to the SSE handler.
 	Events chan OrderEvent
+
+	// Protects CompletedOrder.
+	mu sync.Mutex
+
+	// Set when the Shopify webhook arrives.
+	// This handles the race where the webhook arrives
+	// before Flutter opens the SSE connection.
+	CompletedOrder *OrderEvent
 }
 
 type OrderEvent struct {
 	OrderID string `json:"orderId"`
 }
 
+// Temp struct 'YourSessionID' would be CartId
+type ShopifyOrderWebhook struct {
+	ID int64 `json:"id"`
+	// YourSessionID string `json:"your_session_id"`
+	CartID string `json:"cart_id"`
+}
+
 type Item struct {
 	VariantID string `json:"variantId"`
 	Quantity  int    `json:"quantity"`
 }
-
-// GraphQL Types
-// type Product struct {
-// 	// ID    string `json:"id"`
-// 	// Title string `json:"title"`
-// 	ProductData map[string]any `json:`
-// }
-
-//	type ProductEdge struct {
-//		Node Product `json:"node"`
-//	}
-// type ProductEdge struct {
-// 	Node map[string]any `json:"node"`
-// }
 
 type ProductConnection struct {
 	// Edges []ProductEdge `json:"edges"`
@@ -70,6 +76,14 @@ type QueryResult struct {
 
 type ProductQueryResult struct {
 	Product map[string]any `json:"product"`
+}
+
+type CheckoutResponse struct {
+	SessionId string `json:"sessionId"` //? not sure if this works
+	// Cart      CartResult `json:"cart"`
+	Id          string `json:"id"`
+	CheckoutUrl string `json:"checkoutUrl"`
+	Quantity    int    `json:"totalQuantity"`
 }
 
 type CartResult struct {
