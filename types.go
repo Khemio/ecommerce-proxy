@@ -24,9 +24,8 @@ type MarketplaceServer struct {
 	config Config
 	logger *log.Logger
 
-	sessionsMu   sync.RWMutex
-	sessions     map[string]*Session
-	cartSessions map[string]string //? maybe not needed
+	sessionsMu sync.RWMutex
+	sessions   map[string]*Session
 }
 
 type Session struct {
@@ -50,14 +49,23 @@ type Session struct {
 }
 
 type OrderEvent struct {
-	OrderID string `json:"orderId"`
+	OrderID string         `json:"orderId"`
+	Data    map[string]any `json:"data"`
 }
 
 // Temp struct 'YourSessionID' would be CartId
 type ShopifyOrderWebhook struct {
+	// Data map[string]any `json:"ucp"`
 	ID int64 `json:"id"`
+	// Label string `json:"label"`
 	// YourSessionID string `json:"your_session_id"`
-	CartID string `json:"cart_id"`
+	// CheckoutID string             `json:"checkout_id"`
+	Attributes []ShopifyAttribute `json:"note_attributes"`
+}
+
+type ShopifyAttribute struct {
+	Key   string `json:"name"`
+	Value string `json:"value"`
 }
 
 type Item struct {

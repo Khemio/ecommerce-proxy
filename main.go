@@ -16,6 +16,13 @@ func main() {
 
 	srv, server := MakeServer()
 
+	// Context controlling background server tasks.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start background session cleanup.
+	go server.StartSessionCleanup(ctx)
+
 	// Concurrency Strategy: Graceful shutdown loop
 	go func() {
 		server.logger.Printf("Server initializing on port %s...", server.config.Port)
@@ -30,10 +37,10 @@ func main() {
 	<-stop
 
 	server.logger.Println("Shutdown signal received. Packaging remaining threads...")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		server.logger.Fatalf("Forced shutdown encountered errors: %v", err)
 	}
 	server.logger.Println("Server safely offline.")

@@ -16,12 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-func extractToken(cartID string) string {
-	parts := strings.Split(cartID, "?")
-	segments := strings.Split(parts[0], "/")
-	return segments[len(segments)-1]
-}
-
 func (s *MarketplaceServer) HandleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"operational"}`))
@@ -79,11 +73,8 @@ func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Generate a server-side ID.
 	sessionID := uuid.NewString()
-	fmt.Printf("Generated Session ID: %s\n", sessionID)
 
-	// Create Shopify cart.
 	graphQLResp := CreateCartAndCheckout(
 		&s.config,
 		items,
@@ -91,12 +82,10 @@ func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Reques
 	)
 
 	cart := graphQLResp.Data.CartCreate.Cart
-	cartID := cart.Id
-	cartToken := extractToken(cartID)
 
 	session := &Session{
-		ID:        sessionID,
-		CartToken: cartToken,
+		ID: sessionID,
+		// CartToken: cartToken,
 
 		CreatedAt: time.Now(),
 
@@ -105,45 +94,18 @@ func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Reques
 		Events: make(chan OrderEvent, 1),
 	}
 
-	s.sessionsMu.Lock()
+	// s.sessionsMu.Lock()
 
-	// If this client already has a session, clean up the old one.
-	// if old, exists := s.sessions[clientID]; exists {
-	if old, exists := s.sessions[sessionID]; exists {
-		close(old.Events)
-	}
+	// // If this client already has a session, clean up the old one.
+	// if old, exists := s.sessions[sessionID]; exists {
+	// 	close(old.Events)
+	// }
 
-	s.sessions[sessionID] = session
-	s.cartSessions[cartToken] = sessionID
-	// s.sessions[clientID] = session
-	// s.cartSessions[cartToken] = clientID
+	// s.sessions[sessionID] = session
 
-	s.sessionsMu.Unlock()
+	// s.sessionsMu.Unlock()
 
-	// --- DELAYED SSE LOGIC ---
-	// Simulating an event (e.g., Order Processed) sent 5 seconds later
-	time.AfterFunc(5*time.Second, func() {
-		s.sessionsMu.RLock()
-		currentSession, exists := s.sessions[sessionID]
-		s.sessionsMu.RUnlock()
-		fmt.Println(exists)
-		// fmt.Printf("SSE: %b\n", exists)
-		// Verify the session hasn't been overwritten or closed in the meantime
-		if exists && currentSession == session {
-			event := OrderEvent{
-				// OrderID: "TEST_ORDER_ID_1234567890",
-				OrderID: sessionID,
-			}
-			// Safely attempt to send to the channel
-			select {
-			case currentSession.Events <- event:
-				// Event successfully queued for SSE listener
-			default:
-				s.logger.Printf("Warning: Channel full, event dropped for client %s", sessionID)
-			}
-		}
-	})
-	// -------------------------
+	s.saveSession(session)
 
 	response := CheckoutResponse{
 		SessionId:   sessionID,
@@ -165,18 +127,20 @@ func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Reques
 	sessionID := r.URL.Query().Get("sessionId")
 
 	if sessionID == "" {
-		http.Error(w, "missing clientId", http.StatusBadRequest)
+		http.Error(w, "missing sessionId", http.StatusBadRequest)
 		return
 	}
 
 	fmt.Printf("SSE Session ID: %s\n", sessionID)
 
-	s.sessionsMu.RLock()
-	session, exists := s.sessions[sessionID]
-	s.sessionsMu.RUnlock()
+	// s.sessionsMu.RLock()
+	// session, exists := s.sessions[sessionID]
+	// s.sessionsMu.RUnlock()
+	session, exists := s.getSession(sessionID)
 
 	if !exists {
-		http.Error(w, "session not found", http.StatusNotFound)
+		msg := fmt.Sprintf("Server Error: Session %s not found\n", sessionID)
+		http.Error(w, msg, http.StatusNotFound)
 		return
 	}
 
@@ -188,22 +152,34 @@ func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Reques
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(
-			w,
-			"streaming unsupported",
-			http.StatusInternalServerError,
-		)
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
 
-	// Tell client that the SSE connection is alive.
 	fmt.Fprint(w, ": connected\n\n")
 	// fmt.Fprint(w, "event: connected\ndata: ack\n\n")
 	flusher.Flush()
 
+	session.mu.Lock()
+
+	completedOrder := session.CompletedOrder
+
+	session.mu.Unlock()
+
+	if completedOrder != nil {
+		if err := writeSSEOrder(w, flusher, *completedOrder); err != nil {
+			s.logger.Printf("failed writing stored SSE event: %v", err)
+		}
+
+		s.logger.Printf("Finished writing Completed Order to session: %s\n", sessionID)
+		s.deleteSession(sessionID)
+
+		return
+	}
+
 	ctx := r.Context()
 
-	heartbeatTicker := time.NewTicker(30 * time.Second)
+	heartbeatTicker := time.NewTicker(15 * time.Second)
 	defer heartbeatTicker.Stop()
 
 	for {
@@ -216,25 +192,14 @@ func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Reques
 				return
 			}
 
-			data, err := json.Marshal(event)
-			if err != nil {
-				s.logger.Printf("failed encoding SSE event: %v", err)
-				continue
+			if err := writeSSEOrder(w, flusher, event); err != nil {
+				s.logger.Printf("Failed writing SSE event: %v", err)
+				return
 			}
 
-			fmt.Fprintf(w, "event: order_completed\n")
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			s.logger.Printf("Order sent, disposing of session: %s", sessionID)
+			s.deleteSession(sessionID)
 
-			flusher.Flush()
-
-			// Order has been delivered.
-			return
-
-		case <-ctx.Done():
-			s.logger.Printf(
-				"SSE client disconnected: %s",
-				sessionID,
-			)
 			return
 
 		// case <-time.After(30 * time.Second):
@@ -242,6 +207,13 @@ func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Reques
 			// Keep connection alive.
 			fmt.Fprint(w, ": heartbeat\n\n")
 			flusher.Flush()
+
+		case <-ctx.Done():
+			s.logger.Printf(
+				"SSE client disconnected: %s",
+				sessionID,
+			)
+			return
 		}
 	}
 }
@@ -249,55 +221,123 @@ func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Reques
 func (s *MarketplaceServer) HandleShopifyWebhook(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+
+	if err != nil {
+		http.Error(
+			w,
+			"failed reading webhook",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
 	hmacHeader := r.Header.Get("X-Shopify-Hmac-Sha256")
 	if !verifyHMAC(body, hmacHeader, s.config.ShopifySecretToken) {
+		s.logger.Println("Failed HMAC verification")
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
+	w.WriteHeader(http.StatusOK)
 
 	var webhook ShopifyOrderWebhook
 
-	if err := json.NewDecoder(r.Body).Decode(&webhook); err != nil {
-		http.Error(w, "invalid webhook", http.StatusBadRequest)
+	if err := json.Unmarshal(body, &webhook); err != nil {
+		s.logger.Println("Failed to parse response: ", err)
 		return
 	}
 
-	s.sessionsMu.RLock()
+	// fmt.Printf("Webhook data struct: \n%+v \n", webhook)
+	// fmt.Println("Webhook OrderID: ", webhook.ID)
+	// fmt.Println("Webhook SessionID: ", webhook.Attributes[0].Value)]
 
-	// 'YourSessionID' would probably be CartId
-	// session, exists := s.sessions[webhook.YourSessionID]
-	sessionId, exists := s.cartSessions[webhook.CartID]
-	session, exists := s.sessions[sessionId]
+	sessionID := ""
 
-	s.sessionsMu.RUnlock()
+	for _, attribute := range webhook.Attributes {
+		if attribute.Key == "go_session_id" {
+			sessionID = attribute.Value
+			break
+		}
+	}
+
+	if sessionID == "" {
+		s.logger.Printf(
+			"Shopify order %d has no go_session_id",
+			webhook.ID,
+		)
+
+		return
+	}
+
+	session, exists := s.getSession(sessionID)
 
 	if !exists {
-		// The order may have been created for an old/expired session.
-		w.WriteHeader(http.StatusOK)
+		// Session may have expired or already been handled.
+		s.logger.Printf("session not found: %s", sessionID)
 		return
 	}
 
 	event := OrderEvent{
-		OrderID: strconv.FormatInt(webhook.ID, 10),
+		OrderID: fmt.Sprintf("%d", webhook.ID),
 	}
+
+	session.mu.Lock()
+
+	session.CompletedOrder = &event
+
+	session.mu.Unlock()
+	s.logger.Printf("order event created")
 
 	// Don't hold the mutex while potentially blocking.
 	select {
 	case session.Events <- event:
+		s.logger.Printf("sent order %d to session %s", webhook.ID, sessionID)
 	default:
 		s.logger.Printf(
-			"event channel full for session %s",
-			session.ID,
+			"session %s event channel already full",
+			sessionID,
 		)
 	}
-
-	w.WriteHeader(http.StatusOK)
 }
 
-func verifyHMAC(body []byte, hmacHeader, secret string) bool {
+func verifyHMAC(body []byte, hmacHeader string, secret string) bool {
+	if hmacHeader == "" || secret == "" {
+		return false
+	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
 	expected := base64.StdEncoding.EncodeToString(mac.Sum(nil))
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(hmacHeader)) == 1
+}
+
+func writeSSEOrder(w http.ResponseWriter, flusher http.Flusher, event OrderEvent) error {
+	data, err := json.Marshal(event)
+
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprint(w, "event: order_completed\n")
+
+	fmt.Fprintf(w, "data: %s\n\n", data)
+
+	flusher.Flush()
+
+	return nil
+}
+
+func extractToken(cartID string) string {
+	if cartID == "" {
+		return ""
+	}
+
+	parts := strings.SplitN(cartID, "?", 2)
+
+	segments := strings.Split(parts[0], "/")
+
+	if len(segments) == 0 {
+		return ""
+	}
+
+	return segments[len(segments)-1]
 }

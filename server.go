@@ -29,18 +29,22 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		config: cfg,
 		logger: logger,
 
-		sessions:     make(map[string]*Session),
-		cartSessions: make(map[string]string), //? maybe not needed
+		sessions: make(map[string]*Session),
 	}
 
 	// Multiplex routes cleanly using standard library features
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/health", server.HandleHealthCheck)
-	mux.HandleFunc("GET /api/v1/products", server.HandleFetchVendorProducts)
-	mux.HandleFunc("GET /api/v1/product/{product_id}", server.HandleFetchVendorProduct)
-	mux.HandleFunc("POST /api/v1/checkout", server.HandleCheckout)
+
+	// Regular HTTP endpoints get a strict 15-second cutoff
+	mux.Handle("GET /api/v1/health", withTimeout(15*time.Second, server.HandleHealthCheck))
+	mux.Handle("GET /api/v1/products", withTimeout(15*time.Second, server.HandleFetchVendorProducts))
+	mux.Handle("GET /api/v1/product/{product_id}", withTimeout(15*time.Second, server.HandleFetchVendorProduct))
+	mux.Handle("POST /api/v1/checkout", withTimeout(15*time.Second, server.HandleCheckout))
+
+	// Webhooks might need slightly longer depending on processing, e.g., 30s
+	mux.Handle("POST /api/v1/shopify/webhook", withTimeout(30*time.Second, server.HandleShopifyWebhook))
+
 	mux.HandleFunc("GET /api/v1/order", server.HandleOrderSSE)
-	mux.HandleFunc("POST /api/v1/shopify/webhook", server.HandleShopifyWebhook)
 
 	// corsHandler := CorsMiddleware()
 
@@ -48,12 +52,14 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		Addr: ":" + cfg.Port,
 		// Addr:         "0.0.0.0:" + cfg.Port,
 		Handler:      LoggingMiddleware(logger)(CorsMiddleware(mux)),
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout:  15 * time.Second,
-		// WriteTimeout: 0,
-		// ReadTimeout:  0,
-		IdleTimeout: 60 * time.Second,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	return srv, server
+}
+
+func withTimeout(timeout time.Duration, next http.HandlerFunc) http.Handler {
+	return http.TimeoutHandler(next, timeout, `{"error": "request timed out"}`)
 }

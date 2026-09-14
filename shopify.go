@@ -86,6 +86,8 @@ func FetchProducts(config *Config, limit int) GraphQLResponse[QueryResult] {
 							title
 							description
 							productType
+							vendor
+							availableForSale
 							variants(first: 1) {
 								edges {
 									node {
