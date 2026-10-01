@@ -37,7 +37,8 @@ type Session struct {
 
 	// Events sent from the Shopify webhook handler
 	// to the SSE handler.
-	Events chan OrderEvent
+	// Events chan OrderEvent
+	Events chan SSEEvent
 
 	// Protects CompletedOrder.
 	mu sync.Mutex
@@ -45,27 +46,70 @@ type Session struct {
 	// Set when the Shopify webhook arrives.
 	// This handles the race where the webhook arrives
 	// before Flutter opens the SSE connection.
-	CompletedOrder *OrderEvent
+	CompletedOrder *SSEEvent
 }
 
 type OrderEvent struct {
-	OrderID string         `json:"orderId"`
-	Data    map[string]any `json:"data"`
+	OrderID            string      `json:"order_id"`
+	Name               string      `json:"order_name"`
+	ConfirmationNumber string      `json:"confirmation_number"`
+	OrderNumber        int         `json:"order_number"`
+	TotalPrice         string      `json:"total_price"`
+	Currency           string      `json:"currency"`
+	LineItems          []OrderItem `json:"line_items"`
+	// FinancialStatus    string `json:"financial_status"`
+}
+
+type OrderItem struct {
+	ProductID string `json:"product_id"`
+	VariantID string `json:"variant_id"`
+	Title     string `json:"title"`
+	Quantity  int    `json:"quantity"`
+	Price     string `json:"price"`
+}
+
+type SSEEvent struct {
+	Event string `json:"event"`
+	Data  any    `json:"data"`
 }
 
 // Temp struct 'YourSessionID' would be CartId
 type ShopifyOrderWebhook struct {
-	// Data map[string]any `json:"ucp"`
-	ID int64 `json:"id"`
-	// Label string `json:"label"`
-	// YourSessionID string `json:"your_session_id"`
-	// CheckoutID string             `json:"checkout_id"`
-	Attributes []ShopifyAttribute `json:"note_attributes"`
+	ID                 int64              `json:"id"`
+	AdminGraphQLID     string             `json:"admin_graphql_api_id"`
+	Name               string             `json:"name"`
+	ConfirmationNumber string             `json:"confirmation_number"`
+	OrderNumber        int                `json:"order_number"`
+	FinancialStatus    string             `json:"financial_status"`
+	TotalPrice         string             `json:"total_price"`
+	Currency           string             `json:"currency"`
+	LineItems          []ShopifyLineItem  `json:"line_items"`
+	Attributes         []ShopifyAttribute `json:"note_attributes"`
+}
+
+func (o ShopifyOrderWebhook) SessionID() string {
+	for _, attr := range o.Attributes {
+		if attr.Key == "go_session_id" {
+			return attr.Value
+		}
+	}
+
+	return ""
 }
 
 type ShopifyAttribute struct {
 	Key   string `json:"name"`
 	Value string `json:"value"`
+}
+
+type ShopifyLineItem struct {
+	ProductID int64  `json:"product_id"`
+	VariantID int64  `json:"variant_id"`
+	Title     string `json:"title"`
+	Name      string `json:"name"`
+	Quantity  int    `json:"quantity"`
+	Price     string `json:"price"`
+	SKU       string `json:"sku"`
 }
 
 type Item struct {

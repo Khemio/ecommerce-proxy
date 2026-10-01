@@ -14,10 +14,6 @@ func (s *MarketplaceServer) saveSession(session *Session) {
 	s.sessionsMu.Lock()
 	defer s.sessionsMu.Unlock()
 
-	if old, exists := s.sessions[session.ID]; exists {
-		close(old.Events)
-	}
-
 	s.sessions[session.ID] = session
 }
 
@@ -42,12 +38,3 @@ func (s *MarketplaceServer) deleteSession(sessionID string) {
 		_ = session
 	}
 }
-
-// func (s *MarketplaceServer) deleteSession(
-// 	sessionID string,
-// ) {
-// 	s.sessionsMu.Lock()
-// 	defer s.sessionsMu.Unlock()
-
-// 	delete(s.sessions, sessionID)
-// }

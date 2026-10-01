@@ -44,7 +44,7 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 	// Webhooks might need slightly longer depending on processing, e.g., 30s
 	mux.Handle("POST /api/v1/shopify/webhook", withTimeout(30*time.Second, server.HandleShopifyWebhook))
 
-	mux.HandleFunc("GET /api/v1/order", server.HandleOrderSSE)
+	mux.HandleFunc("GET /api/v1/events", server.HandleSSE)
 
 	// corsHandler := CorsMiddleware()
 

@@ -91,21 +91,12 @@ func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Reques
 
 		// Small buffer protects us from the webhook
 		// arriving before SSE starts.
-		Events: make(chan OrderEvent, 1),
+		Events: make(chan SSEEvent, 1),
 	}
 
-	// s.sessionsMu.Lock()
-
-	// // If this client already has a session, clean up the old one.
-	// if old, exists := s.sessions[sessionID]; exists {
-	// 	close(old.Events)
-	// }
-
-	// s.sessions[sessionID] = session
-
-	// s.sessionsMu.Unlock()
-
 	s.saveSession(session)
+
+	s.testSSEDelayed(sessionID)
 
 	response := CheckoutResponse{
 		SessionId:   sessionID,
@@ -123,7 +114,7 @@ func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Request) {
+func (s *MarketplaceServer) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("sessionId")
 
 	if sessionID == "" {
@@ -133,9 +124,6 @@ func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Reques
 
 	fmt.Printf("SSE Session ID: %s\n", sessionID)
 
-	// s.sessionsMu.RLock()
-	// session, exists := s.sessions[sessionID]
-	// s.sessionsMu.RUnlock()
 	session, exists := s.getSession(sessionID)
 
 	if !exists {
@@ -157,7 +145,6 @@ func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Reques
 	}
 
 	fmt.Fprint(w, ": connected\n\n")
-	// fmt.Fprint(w, "event: connected\ndata: ack\n\n")
 	flusher.Flush()
 
 	session.mu.Lock()
@@ -167,7 +154,7 @@ func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Reques
 	session.mu.Unlock()
 
 	if completedOrder != nil {
-		if err := writeSSEOrder(w, flusher, *completedOrder); err != nil {
+		if err := writeSSEEvent(w, flusher, *completedOrder); err != nil {
 			s.logger.Printf("failed writing stored SSE event: %v", err)
 		}
 
@@ -192,7 +179,7 @@ func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Reques
 				return
 			}
 
-			if err := writeSSEOrder(w, flusher, event); err != nil {
+			if err := writeSSEEvent(w, flusher, event); err != nil {
 				s.logger.Printf("Failed writing SSE event: %v", err)
 				return
 			}
@@ -202,7 +189,6 @@ func (s *MarketplaceServer) HandleOrderSSE(w http.ResponseWriter, r *http.Reques
 
 			return
 
-		// case <-time.After(30 * time.Second):
 		case <-heartbeatTicker.C:
 			// Keep connection alive.
 			fmt.Fprint(w, ": heartbeat\n\n")
@@ -240,30 +226,19 @@ func (s *MarketplaceServer) HandleShopifyWebhook(w http.ResponseWriter, r *http.
 	}
 	w.WriteHeader(http.StatusOK)
 
-	var webhook ShopifyOrderWebhook
+	var order ShopifyOrderWebhook
 
-	if err := json.Unmarshal(body, &webhook); err != nil {
+	if err := json.Unmarshal(body, &order); err != nil {
 		s.logger.Println("Failed to parse response: ", err)
 		return
 	}
 
-	// fmt.Printf("Webhook data struct: \n%+v \n", webhook)
-	// fmt.Println("Webhook OrderID: ", webhook.ID)
-	// fmt.Println("Webhook SessionID: ", webhook.Attributes[0].Value)]
-
-	sessionID := ""
-
-	for _, attribute := range webhook.Attributes {
-		if attribute.Key == "go_session_id" {
-			sessionID = attribute.Value
-			break
-		}
-	}
+	sessionID := order.SessionID()
 
 	if sessionID == "" {
 		s.logger.Printf(
 			"Shopify order %d has no go_session_id",
-			webhook.ID,
+			order.ID,
 		)
 
 		return
@@ -277,8 +252,29 @@ func (s *MarketplaceServer) HandleShopifyWebhook(w http.ResponseWriter, r *http.
 		return
 	}
 
-	event := OrderEvent{
-		OrderID: fmt.Sprintf("%d", webhook.ID),
+	orderItems := make([]OrderItem, len(order.LineItems))
+
+	for i, item := range order.LineItems {
+		orderItems[i] = OrderItem{
+			ProductID: strconv.FormatInt(item.ProductID, 10),
+			VariantID: strconv.FormatInt(item.VariantID, 10),
+			Title:     item.Title,
+			Quantity:  item.Quantity,
+			Price:     item.Price,
+		}
+	}
+
+	event := SSEEvent{
+		Event: "order.created",
+		Data: OrderEvent{
+			OrderID:            strconv.FormatInt(order.ID, 10),
+			Name:               order.Name,
+			ConfirmationNumber: order.ConfirmationNumber,
+			OrderNumber:        order.OrderNumber,
+			Currency:           order.Currency,
+			TotalPrice:         order.TotalPrice,
+			LineItems:          orderItems,
+		},
 	}
 
 	session.mu.Lock()
@@ -291,7 +287,7 @@ func (s *MarketplaceServer) HandleShopifyWebhook(w http.ResponseWriter, r *http.
 	// Don't hold the mutex while potentially blocking.
 	select {
 	case session.Events <- event:
-		s.logger.Printf("sent order %d to session %s", webhook.ID, sessionID)
+		s.logger.Printf("sent order %d to session %s", order.ID, sessionID)
 	default:
 		s.logger.Printf(
 			"session %s event channel already full",
@@ -310,16 +306,19 @@ func verifyHMAC(body []byte, hmacHeader string, secret string) bool {
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(hmacHeader)) == 1
 }
 
-func writeSSEOrder(w http.ResponseWriter, flusher http.Flusher, event OrderEvent) error {
-	data, err := json.Marshal(event)
+func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, event SSEEvent) error {
+	data, err := json.Marshal(event.Data)
 
 	if err != nil {
 		return err
 	}
 
-	fmt.Fprint(w, "event: order_completed\n")
-
-	fmt.Fprintf(w, "data: %s\n\n", data)
+	if _, err := fmt.Fprintf(w, "event: %s\n", event.Event); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+		return err
+	}
 
 	flusher.Flush()
 
@@ -340,4 +339,83 @@ func extractToken(cartID string) string {
 	}
 
 	return segments[len(segments)-1]
+}
+
+func (s *MarketplaceServer) testSSEDelayed(sessionID string) {
+	// Simulating an event (e.g., Order Processed) sent 5 seconds later
+
+	time.AfterFunc(5*time.Second, func() {
+
+		s.sessionsMu.RLock()
+
+		currentSession, exists := s.sessions[sessionID]
+
+		s.sessionsMu.RUnlock()
+
+		// Verify the session hasn't been overwritten or closed in the meantime
+
+		// if exists && currentSession == session {
+		if exists {
+
+			event := SSEEvent{
+				Event: "order.created",
+				Data: OrderEvent{
+					OrderID:            strconv.FormatInt(7239414055129, 10),
+					Name:               "#1026",
+					ConfirmationNumber: "2LI8DGA0X",
+					OrderNumber:        1026,
+					Currency:           "USD",
+					TotalPrice:         strconv.FormatFloat(60810.33, 'f', 2, 32),
+					LineItems: []OrderItem{
+						{
+							ProductID: strconv.FormatInt(9865881256153, 10),
+							VariantID: strconv.FormatInt(49175344709849, 10),
+							Title:     "Azkomoly Box - M",
+							Quantity:  3,
+							Price:     strconv.FormatFloat(13144.23, 'f', 2, 32),
+						},
+						{
+							ProductID: strconv.FormatInt(9865871786201, 10),
+							VariantID: strconv.FormatInt(49175309091033, 10),
+							Title:     "Azkomoly Box - S",
+							Quantity:  2,
+							Price:     strconv.FormatFloat(10688.82, 'f', 2, 32),
+						},
+
+						// FinancialStatus:    order.FinancialStatus,
+					},
+				},
+			}
+
+			// ===== Preemptive order =====
+
+			// session.mu.Lock()
+
+			// session.CompletedOrder = &OrderEvent{
+
+			//  OrderID: sessionID,
+
+			// }
+
+			// session.mu.Unlock()
+
+			// ===========================
+
+			// Safely attempt to send to the channel
+
+			select {
+
+			case currentSession.Events <- event:
+
+				// Event successfully queued for SSE listener
+
+			default:
+
+				s.logger.Printf("Warning: Channel full, event dropped for client %s", sessionID)
+
+			}
+
+		}
+
+	})
 }
