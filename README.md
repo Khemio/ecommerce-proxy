@@ -103,6 +103,12 @@ See [API reference](docs/API.md) for examples and current behavior.
 
 For implementation details see [architecture](docs/ARCHITECTURE.md). For known limitations and prioritized work see [roadmap](docs/ROADMAP.md).
 
+## Development branches
+
+**This README and the API/architecture references document the current `main` branch**, not every work-in-progress branch. As inspected on 2026-11-14, `dev` and `product-caching` point to the same commit (`21c5416`) and include checkout-session tracking, Shopify webhooks, Server-Sent Events (SSE), and session cleanup. Those endpoints/features are **not on `main`**. No implemented product cache or rate-limit middleware was found in the pushed development tree.
+
+See [development branch review](docs/DEVELOPMENT_BRANCHES.md) for the branch-specific HTTP API and cautions. In particular, the SSE development code schedules a fake order event after every checkout and should not be considered production-ready.
+
 ## Related client
 
 A separate Flutter application consumes this API. Keeping the client and backend in separate repositories is reasonable because they have independent build/deployment workflows; link the Flutter repo here once it is published. Do not include employer-owned material unless publication is authorized.
