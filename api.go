@@ -68,9 +68,26 @@ func (s *MarketplaceServer) HandleFetchVendorProducts(w http.ResponseWriter, r *
 func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Request) {
 	var items []Item
 
-	if err := json.NewDecoder(r.Body).Decode(&items); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&items); err != nil {
 		http.Error(w, "Invalid input", http.StatusBadRequest)
 		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		http.Error(w, "Unexpected data after cart items", http.StatusBadRequest)
+		return
+	}
+	if len(items) == 0 || len(items) > 100 {
+		http.Error(w, "Cart must contain between 1 and 100 lines", http.StatusBadRequest)
+		return
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item.VariantID) == "" || item.Quantity <= 0 {
+			http.Error(w, "Each cart line requires a variantId and positive quantity", http.StatusBadRequest)
+			return
+		}
 	}
 
 	sessionID := uuid.NewString()
@@ -82,6 +99,10 @@ func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Reques
 	)
 
 	cart := graphQLResp.Data.CartCreate.Cart
+	if len(graphQLResp.Errors) > 0 || len(graphQLResp.Data.CartCreate.UserErrors) > 0 || cart.Id == "" || cart.CheckoutUrl == "" {
+		http.Error(w, "Unable to create Shopify cart", http.StatusBadGateway)
+		return
+	}
 
 	session := &Session{
 		ID: sessionID,
@@ -95,8 +116,6 @@ func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Reques
 	}
 
 	s.saveSession(session)
-
-	s.testSSEDelayed(sessionID)
 
 	response := CheckoutResponse{
 		SessionId:   sessionID,
@@ -224,12 +243,12 @@ func (s *MarketplaceServer) HandleShopifyWebhook(w http.ResponseWriter, r *http.
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 
 	var order ShopifyOrderWebhook
 
 	if err := json.Unmarshal(body, &order); err != nil {
 		s.logger.Println("Failed to parse response: ", err)
+		http.Error(w, "invalid webhook JSON", http.StatusBadRequest)
 		return
 	}
 
@@ -294,6 +313,8 @@ func (s *MarketplaceServer) HandleShopifyWebhook(w http.ResponseWriter, r *http.
 			sessionID,
 		)
 	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func verifyHMAC(body []byte, hmacHeader string, secret string) bool {
@@ -339,83 +360,4 @@ func extractToken(cartID string) string {
 	}
 
 	return segments[len(segments)-1]
-}
-
-func (s *MarketplaceServer) testSSEDelayed(sessionID string) {
-	// Simulating an event (e.g., Order Processed) sent 5 seconds later
-
-	time.AfterFunc(5*time.Second, func() {
-
-		s.sessionsMu.RLock()
-
-		currentSession, exists := s.sessions[sessionID]
-
-		s.sessionsMu.RUnlock()
-
-		// Verify the session hasn't been overwritten or closed in the meantime
-
-		// if exists && currentSession == session {
-		if exists {
-
-			event := SSEEvent{
-				Event: "order.created",
-				Data: OrderEvent{
-					OrderID:            strconv.FormatInt(7239414055129, 10),
-					Name:               "#1026",
-					ConfirmationNumber: "2LI8DGA0X",
-					OrderNumber:        1026,
-					Currency:           "USD",
-					TotalPrice:         strconv.FormatFloat(60810.33, 'f', 2, 32),
-					LineItems: []OrderItem{
-						{
-							ProductID: strconv.FormatInt(9865881256153, 10),
-							VariantID: strconv.FormatInt(49175344709849, 10),
-							Title:     "Azkomoly Box - M",
-							Quantity:  3,
-							Price:     strconv.FormatFloat(13144.23, 'f', 2, 32),
-						},
-						{
-							ProductID: strconv.FormatInt(9865871786201, 10),
-							VariantID: strconv.FormatInt(49175309091033, 10),
-							Title:     "Azkomoly Box - S",
-							Quantity:  2,
-							Price:     strconv.FormatFloat(10688.82, 'f', 2, 32),
-						},
-
-						// FinancialStatus:    order.FinancialStatus,
-					},
-				},
-			}
-
-			// ===== Preemptive order =====
-
-			// session.mu.Lock()
-
-			// session.CompletedOrder = &OrderEvent{
-
-			//  OrderID: sessionID,
-
-			// }
-
-			// session.mu.Unlock()
-
-			// ===========================
-
-			// Safely attempt to send to the channel
-
-			select {
-
-			case currentSession.Events <- event:
-
-				// Event successfully queued for SSE listener
-
-			default:
-
-				s.logger.Printf("Warning: Channel full, event dropped for client %s", sessionID)
-
-			}
-
-		}
-
-	})
 }
