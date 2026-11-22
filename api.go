@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -261,12 +262,23 @@ func (s *MarketplaceServer) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const maxWebhookBodySize = 4 << 20 // 4 MiB
+
 func (s *MarketplaceServer) HandleShopifyWebhook(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBodySize)
 	defer r.Body.Close()
 
 	body, err := io.ReadAll(r.Body)
 
 	if err != nil {
+		var maxErr *http.MaxBytesError
+
+		if errors.As(err, &maxErr) {
+			http.Error(w, "webhook payload too large",
+				http.StatusRequestEntityTooLarge)
+			return
+		}
+
 		http.Error(
 			w,
 			"failed reading webhook",
