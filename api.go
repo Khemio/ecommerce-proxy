@@ -69,20 +69,26 @@ func (s *MarketplaceServer) HandleFetchVendorProducts(w http.ResponseWriter, r *
 		return
 	}
 
-	// if graphQLResp.Data.Products.Edges == nil ||
-	if len(graphQLResp.Data.Products.Edges) == 0 {
-		http.Error(w, "No products were found", http.StatusNotFound)
-		return
-	}
+	products := make(
+		[]map[string]any,
+		0,
+		len(graphQLResp.Data.Products.Edges),
+	)
 
-	for i := range graphQLResp.Data.Products.Edges {
-		edge := &graphQLResp.Data.Products.Edges[i]
-		*edge = TransformGraphQLResponse(*edge).(map[string]any)
+	for _, edge := range graphQLResp.Data.Products.Edges {
+		product, ok := TransformGraphQLResponse(edge).(map[string]any)
+		if !ok {
+			s.logger.Printf("Unexpected product data: %T", edge)
+			http.Error(w, "Invalid Shopify response", http.StatusBadGateway)
+			return
+		}
+
+		products = append(products, product)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(TransformGraphQLResponse(graphQLResp.Data.Products.Edges)); err != nil {
+	if err := json.NewEncoder(w).Encode(products); err != nil {
 		s.logger.Printf("Failed writing network buffer: %v", err)
 	}
 }
