@@ -174,8 +174,8 @@ func CreateCartAndCheckout(
 		return graphQLResp, err
 	}
 
-	// TODO check that url is not empty
-	if config.Environment == "dev" {
+	if config.Environment == "dev" &&
+		graphQLResp.Data.CartCreate.Cart.CheckoutUrl != "" {
 		originalUrl := graphQLResp.Data.CartCreate.Cart.CheckoutUrl
 		separator := "?"
 		if strings.Contains(originalUrl, "?") {
