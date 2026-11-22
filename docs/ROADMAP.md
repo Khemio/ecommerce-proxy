@@ -1,84 +1,59 @@
-# Roadmap and known issues
+# Roadmap and known limitations
 
-This is a small, focused improvement plan for making the internship prototype reliable and presentable. The items below are proposals, not completed features. The baseline documentation reflects `main`; `dev` / `product-caching` also contain webhook/SSE work. See [development branch review](DEVELOPMENT_BRANCHES.md).
+This project is intentionally scoped as a small Go-to-Shopify integration backend for a Flutter e-commerce prototype. The immediate portfolio goal is a coherent, tested, honest single-instance implementation—not a comprehensive commerce platform.
 
-## P0 — correctness and safe operation
+## Implemented
 
-- [ ] Propagate outbound HTTP errors, non-2xx Shopify responses, GraphQL `errors` and `cartCreate.userErrors`; return consistent non-200 REST errors.
-- [ ] Handle missing product and nil GraphQL data safely instead of asserting `.(map[string]any)` and risking a panic.
-- [ ] Validate checkout lines: non-empty variant IDs, strictly positive quantities, non-empty cart, and bounded payload size.
-- [ ] Replace duplicate `limit` parsing with one checked parse and bounds; reject invalid input with HTTP 400.
-- [ ] Add outbound request timeouts and request-context propagation; avoid unbounded Shopify calls.
-- [ ] Make `SHOPIFY_API_VERSION` control constructed endpoint URLs; eliminate the hardcoded version mismatch.
-- [ ] Fail startup on missing/placeholder credentials rather than silently serving misconfigured routes.
-- [ ] Audit ownership/publication rights and remove any real tokens or employer-specific internal details before sharing client and server code.
+- [x] Shopify Storefront GraphQL product list/detail and cart creation.
+- [x] Checkout input validation (nonempty cart, valid lines, positive quantities, bounded JSON body).
+- [x] HTTP status, JSON and GraphQL error propagation with outbound timeouts/context handling.
+- [x] Checked catalog `limit` (1–100) and `200 []` for an empty catalog.
+- [x] `SHOPIFY_API_VERSION` respected in endpoint construction.
+- [x] Checkout session UUIDs, Shopify cart attribute correlation, verified order webhook, and SSE event delivery.
+- [x] Removed fabricated development order events.
+- [x] Basic duplicate-event suppression, reconnect handling, two-hour session TTL, and session cleanup.
+- [x] Per-client token-bucket rate limiting and global/per-client SSE connection caps.
+- [x] Bounded in-memory catalog cache with TTL, singleflight, and tests for expiry, failures, eviction, concurrency.
+- [x] Automated `go test -race` checks and successful Docker build / local health smoke test.
 
-## P1 — tests and API quality
+## Before any public production deployment
 
-- [ ] Add table-driven unit tests for ID normalization and response transformation.
-- [ ] Add handler tests using `net/http/httptest` and a mocked Shopify API.
-- [ ] Add tests for malformed JSON, empty cart, invalid limit, missing products, timeouts and Shopify `userErrors`.
-- [ ] Introduce typed, documented request/response structs and a stable JSON error envelope.
-- [ ] Return consistent `Content-Type: application/json` on JSON responses, including health and errors.
-- [ ] Constrain CORS to known client origins for production, especially if browser clients are expected.
-- [ ] Ensure sensitive details cannot enter logs; consider request IDs and status/latency logging.
-- [ ] Add CI to run `go test ./...`, `go vet ./...` and formatting checks.
+- [ ] **Verify Shopify webhook semantics end to end.** `order.created` is not proof of successful payment. Check the actual subscription topic and design the client state transition accordingly.
+- [ ] **Validate configuration at startup.** Reject missing/placeholder storefront and webhook secrets for production rather than allowing a superficially healthy server with unusable upstream integrations.
+- [ ] **Review hosting lifecycle.** Fly's checked-in config auto-stops machines and keeps zero running, which is not aligned with in-memory session delivery. Decide whether to keep one instance permanently running or introduce shared, persistent session/event storage.
+- [ ] **Review web security.** Limit CORS origins as appropriate, decide whether clients need authentication, and treat session IDs as bearer-like secrets; verify there is no direct bypass of trusted-proxy IP resolution.
+- [ ] **Exercise a real Shopify sandbox/test store.** Validate checkout URL, order webhook signature, `go_session_id` propagation, webhook retry behavior, and Flutter SSE handling. Unit/integration mocks cannot establish these external contracts.
+- [ ] **Reconcile deployment settings.** `fly.toml` has `PORT` rather than `SERVER_PORT`, an unused old `GO_VERSION` build argument, and automatic machine stopping. Review resource limits and ensure deployment secrets are configured.
+- [ ] **Ensure publication permissions.** This began as internship work; verify that no employer-owned code, tokens, internal endpoints, or confidential details are published without authorization.
 
-## P2 — useful but optional
+## Near-term maintenance and test quality
 
-- [ ] Support cursor-based pagination for product listings.
-- [ ] Expose multiple variants/images if the Flutter UI requires them.
-- [ ] Decide whether the unused Admin API configuration/function should be removed.
-- [ ] Add a production deployment guide and smoke-test checklist.
-- [ ] Add optional integration tests gated behind explicit Shopify test credentials.
+- [ ] Add happy-path tests for nonempty product transformations and successful checkout cart creation, plus invalid limit and Shopify `userErrors` cases.
+- [ ] Test duplicate webhook requests concurrently, not only sequentially, and clarify behavior with two simultaneous SSE listeners.
+- [ ] Add a uniform JSON error format and consistent response `Content-Type`; health currently has a JSON body without explicit JSON content type.
+- [ ] Remove dead code, obsolete comments, duplicate configuration paths, and unused Admin API helpers if there is no planned use.
+- [ ] Add GitHub Actions to run `gofmt` checks, `go test ./...`, `go test -race ./...` and `go vet ./...` on pull requests.
+- [ ] Improve logging to include status/latency, with no secrets or unnecessary session identifiers.
+- [ ] Add tests and constraints around oversized Shopify responses, pathological catalog shapes, and slow/aborted SSE clients.
 
-## Scope decisions
+## Future features (only when needed)
 
-Do **not** add a database, authentication system, payment processing, large framework migration or microservice architecture merely for portfolio value. The immediate goal is a dependable thin integration server.
+- [ ] Typed, stable product DTOs to replace dynamic map manipulation after the Shopify data contract is better understood.
+- [ ] Cursor-based catalog pagination, multiple images/variants, and additional filtering/search if required by the Flutter UI.
+- [ ] Cache product details; consider cache invalidation on product updates and simple hit/miss instrumentation.
+- [ ] Persist checkout session/event state (for example Redis) and make webhook handling robust across multiple replicas and process restarts.
+- [ ] Add a durable webhook queue, event IDs, replay/deduplication by webhook or order identity, and a stronger client acknowledgement protocol if reliable delivery becomes necessary.
+- [ ] Add distributed rate limits or an edge/API gateway if multiple replicas or meaningful abuse traffic justify them.
+- [ ] Evaluate a standalone reverse-proxy experiment separately; it is not required for the Shopify backend.
 
-## Suggested definition of done
+## Current operational assumptions
 
-- Invalid requests and upstream failures never crash a handler and return a documented error.
-- Product list, product detail and cart creation have automated happy-path/error-path tests.
-- Deployment configuration and API version are aligned.
-- The README matches tested local startup and contains no secrets.
-- The related Flutter app is linked and can use the documented API without relying on undocumented response quirks.
+- One running Go server instance with modest traffic (original target: under 1,000 daily users).
+- Sessions, cache, rate-limit buckets and SSE permits are in-memory and per process.
+- One meaningful order notification per checkout session and one intended SSE consumer per session.
+- Shopify is the source of truth for checkout, order lifecycle and payment.
+- The server provides best-effort notifications, not a transaction ledger or exactly-once event guarantee.
 
-## P0 — development branch SSE / webhook correctness
+## Completion criterion for the portfolio release
 
-The following concern `dev` and `product-caching` at commit `21c5416`, not the current `main`:
-
-- [ ] **Remove or explicitly gate `testSSEDelayed`**: every checkout currently queues a fabricated `order.created` notification after five seconds, regardless of payment.
-- [ ] Verify and parse Shopify webhooks before acknowledging processing success; currently HTTP 200 is sent immediately after HMAC validation, before JSON parsing and session lookup.
-- [ ] Define webhook retry/idempotency and duplicate-delivery behavior. Test invalid HMAC, malformed payloads, missing sessions and arrival-before-SSE races.
-- [ ] Design session lifecycle for reconnects, expiry and multiple SSE listeners; the current buffered channel supports a single consumer and sessions live only in process memory.
-- [ ] Resolve multi-instance deployment behavior: a webhook routed to a different Fly.io instance cannot find an in-memory session.
-- [ ] Correct browser CORS configuration: wildcard `Access-Control-Allow-Origin: *` must not be combined with `Access-Control-Allow-Credentials: true` for credentialed requests.
-- [ ] Add tests for real order completion, early webhook, client disconnect, heartbeat, session cleanup and graceful shutdown.
-
-## P1 — product caching (planned; not present in pushed branch)
-
-- [ ] Start with a small, concurrency-safe **in-memory TTL cache** for successful product-list and product-detail responses. Suggested initial TTL: 5–15 minutes, adjustable after observing update frequency.
-- [ ] Key list responses by relevant query inputs (at least `limit`, and cursor when pagination is added); key detail responses by canonical Shopify product ID. Distinguish store/API version if configuration becomes multi-store.
-- [ ] Prevent concurrent cache misses from producing redundant Shopify queries (e.g. `singleflight`).
-- [ ] Do not cache failed queries, incomplete GraphQL responses, carts, checkout URLs or session-specific data.
-- [ ] Test cold/hot fetches, TTL expiry, concurrent misses, failures, and updates. Add cache hit/miss counters.
-- [ ] Consider Shopify product-update webhooks for invalidation **only after** basic TTL behavior is correct and the webhook path is robust.
-- [ ] Remember that in-memory cache entries are per server instance and disappear on restart. Introduce a shared cache only if multi-instance operation requires it.
-
-## P1 — inbound rate limiting (planned; not implemented)
-
-- [ ] Add middleware using a token bucket (e.g. `golang.org/x/time/rate`) with a bounded, expiring per-client state map; do not let arbitrary IP keys grow indefinitely.
-- [ ] Apply stricter limits to `POST /api/v1/checkout` than to product reads; use separate rules for SSE connections, health checks and authenticated Shopify webhooks.
-- [ ] Return HTTP `429 Too Many Requests` and a useful `Retry-After` header. Add tests for bursts, sustained traffic and eviction.
-- [ ] Carefully identify clients behind trusted proxies; do not blindly trust client-controlled `X-Forwarded-For`.
-- [ ] In-memory limits are **per instance**. If Fly.io scales to multiple instances, consider rate limiting at the edge or in shared storage.
-- [ ] Keep inbound abuse protection separate from Shopify upstream throttling, retries and GraphQL cost management.
-
-## Implementation order
-
-1. Fix existing error handling and unsafe checkout/session behavior.
-2. Remove simulated order events; test the webhook/SSE workflow.
-3. Add product caching with TTL and tests.
-4. Introduce basic, observable per-client rate limiting.
-5. Revisit shared caching and distributed limits only if deployment requires them.
+Documentation matches the merged source, setup and Docker commands work, automated tests pass, known limitations are explicit, and the related Flutter repository is linked. Do not claim verified real-world checkout or payment confirmation unless that has been tested with Shopify.

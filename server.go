@@ -11,7 +11,6 @@ import (
 func MakeServer() (*http.Server, *MarketplaceServer) {
 	logger := log.New(os.Stdout, "[MARKETPLACE-API] ", log.LstdFlags|log.Lshortfile)
 
-	// Inject credentials safely (Fallback to defaults for local development)
 	cfg := Config{
 		Port:                   GetEnv("SERVER_PORT", "8080"),
 		Environment:            GetEnv("ENV", "dev"),
@@ -19,34 +18,81 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		ShopifyDomain:          GetEnv("SHOPIFY_STORE_NAME", "test-store"),
 		ShopifyAdminToken:      GetEnv("SHOPIFY_ADMIN_TOKEN", "admin-tocken"),
 		ShopifyStorefrontToken: GetEnv("SHOPIFY_STOREFRONT_TOKEN", "store-front-token"),
+		ShopifySecretToken:     GetEnv("SHOPIFY_SECRET_TOKEN", "secret-token"),
 	}
-	cfg.AdminEndpoint = fmt.Sprintf("https://%s.myshopify.com/admin/api/%s/graphql.json", cfg.ShopifyDomain, version)
-	cfg.StorefrontEndpoint = fmt.Sprintf("https://%s.myshopify.com/api/%s/graphql.json", cfg.ShopifyDomain, version)
+	cfg.AdminEndpoint = fmt.Sprintf("https://%s.myshopify.com/admin/api/%s/graphql.json", cfg.ShopifyDomain, cfg.APIVersion)
+	cfg.StorefrontEndpoint = fmt.Sprintf("https://%s.myshopify.com/api/%s/graphql.json", cfg.ShopifyDomain, cfg.APIVersion)
 
 	logger.Printf("Server will start on port %s...", cfg.Port)
 
 	server := &MarketplaceServer{
 		config: cfg,
 		logger: logger,
+
+		sessions:     make(map[string]*Session),
+		productCache: NewProductCache(60*time.Second, 128),
 	}
+
+	trustFlyProxy := GetEnv("TRUST_FLY_PROXY", "false") == "true"
+
+	productLimiter := NewIPRateLimiter(time.Second, 10, 5000)
+	checkoutLimiter := NewIPRateLimiter(30*time.Second, 3, 5000)
+
+	productLimiter.trustFlyProxy = trustFlyProxy
+	checkoutLimiter.trustFlyProxy = trustFlyProxy
+
+	sseLimiter := NewSSEConnectionLimiter(50)
+	ssePerIPLimiter := NewSSEPerIPLimiter(5, trustFlyProxy)
 
 	// Multiplex routes cleanly using standard library features
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/health", server.HandleHealthCheck)
-	mux.HandleFunc("GET /api/v1/products", server.HandleFetchVendorProducts)
-	mux.HandleFunc("GET /api/v1/product/{product_id}", server.HandleFetchVendorProduct)
-	mux.HandleFunc("POST /api/v1/checkout", server.HandleCheckout)
 
-	// corsHandler := CorsMiddleware()
+	// Regular HTTP endpoints get a strict 15-second cutoff
+	mux.Handle("GET /api/v1/health", withTimeout(15*time.Second, server.HandleHealthCheck))
+	mux.Handle(
+		"GET /api/v1/products",
+		productLimiter.Middleware(
+			withTimeout(15*time.Second, server.HandleFetchVendorProducts),
+		),
+	)
+
+	mux.Handle(
+		"GET /api/v1/product/{product_id}",
+		productLimiter.Middleware(
+			withTimeout(15*time.Second, server.HandleFetchVendorProduct),
+		),
+	)
+
+	mux.Handle(
+		"POST /api/v1/checkout",
+		checkoutLimiter.Middleware(
+			withTimeout(15*time.Second, server.HandleCheckout),
+		),
+	)
+
+	mux.Handle("POST /api/v1/shopify/webhook", withTimeout(4*time.Second, server.HandleShopifyWebhook))
+
+	mux.Handle(
+		"GET /api/v1/events",
+		sseLimiter.Middleware(
+			ssePerIPLimiter.Middleware(
+				http.HandlerFunc(server.HandleSSE),
+			),
+		),
+	)
 
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
 		// Addr:         "0.0.0.0:" + cfg.Port,
 		Handler:      LoggingMiddleware(logger)(CorsMiddleware(mux)),
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout:  15 * time.Second,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
 	}
 
 	return srv, server
+}
+
+func withTimeout(timeout time.Duration, next http.HandlerFunc) http.Handler {
+	return http.TimeoutHandler(next, timeout, `{"error": "request timed out"}`)
 }

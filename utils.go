@@ -39,7 +39,7 @@ func CorsMiddleware(next http.Handler) http.Handler {
 		// Allows requests from your Flutter Web local dev environment
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Client-Id, Accept, Cache-Control")
 
 		// Handle preflight OPTIONS requests sent automatically by Chrome
 		if r.Method == "OPTIONS" {
@@ -58,6 +58,10 @@ func GetEnv(key, fallback string) string {
 	return fallback
 }
 
+// FlattenGraphQLResponse is an experimental utility for exploring
+// recursive flattening of nested JSON-like maps.
+// It is not used by the current API and may discard information
+// when flattening arrays containing multiple objects.
 func FlattenGraphQLResponse(input map[string]any) map[string]any {
 	flattened := make(map[string]any)
 	flattenRecursive(input, "", flattened)

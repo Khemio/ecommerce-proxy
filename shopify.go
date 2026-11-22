@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type HttpHeader struct {
@@ -14,7 +16,7 @@ type HttpHeader struct {
 	Value string
 }
 
-func FetchProduct(config *Config, id string) GraphQLResponse[ProductQueryResult] {
+func FetchProduct(ctx context.Context, config *Config, id string) (GraphQLResponse[ProductQueryResult], error) {
 	// You can use `product(handle:)` to query a single product by its handle instead.
 	query := `
 		query getProduct($id: ID!) {
@@ -54,28 +56,15 @@ func FetchProduct(config *Config, id string) GraphQLResponse[ProductQueryResult]
 		"id": productId,
 	}
 
-	body, err := sendStorefrontRequest(config, query, variables)
+	body, err := sendStorefrontRequest(ctx, config, query, variables)
 	if err != nil {
-		fmt.Println("Something went wrong with GraphQL request")
+		return GraphQLResponse[ProductQueryResult]{}, err
 	}
 
-	var graphQLResp GraphQLResponse[ProductQueryResult]
-
-	if err := json.Unmarshal(body, &graphQLResp); err != nil {
-		fmt.Println("JSON Error:", err)
-		// return
-	}
-
-	if len(graphQLResp.Errors) > 0 {
-		fmt.Println("GraphQL Errors:", graphQLResp.Errors)
-		// return
-	}
-
-	return graphQLResp
+	return parseGraphQL[ProductQueryResult](body)
 }
 
-// TODO: handle errors
-func FetchProducts(config *Config, limit int) GraphQLResponse[QueryResult] {
+func FetchProducts(ctx context.Context, config *Config, limit int) (GraphQLResponse[QueryResult], error) {
 
 	query := `
 			query getProducts($limit: Int!) {
@@ -86,6 +75,8 @@ func FetchProducts(config *Config, limit int) GraphQLResponse[QueryResult] {
 							title
 							description
 							productType
+							vendor
+							availableForSale
 							variants(first: 1) {
 								edges {
 									node {
@@ -114,40 +105,20 @@ func FetchProducts(config *Config, limit int) GraphQLResponse[QueryResult] {
 	}
 
 	// body, err := sendAdminRequest(config, query, variables)
-	body, err := sendStorefrontRequest(config, query, variables)
+	body, err := sendStorefrontRequest(ctx, config, query, variables)
 	if err != nil {
-		fmt.Println("Something went wrong with GraphQL request")
+		return GraphQLResponse[QueryResult]{}, err
 	}
 
-	var graphQLResp GraphQLResponse[QueryResult]
-
-	if err := json.Unmarshal(body, &graphQLResp); err != nil {
-		fmt.Println("JSON Error:", err)
-		// return
-	}
-
-	if len(graphQLResp.Errors) > 0 {
-		fmt.Println("GraphQL Errors:", graphQLResp.Errors)
-		// return
-	}
-
-	return graphQLResp
+	return parseGraphQL[QueryResult](body)
 }
 
-// POST /api/cart
-// TODO: Handle errors
-func CreateCartAndCheckout(config *Config, items []Item) GraphQLResponse[CheckoutQueryResult] {
-	// Parse input from mobile app
-	// 	[
-	// 	{
-	// 	  "variantId": "gid://shopify/ProductVariant/49042404180185",
-	// 	  "quantity": 1
-	// 	},
-	// 	{
-	// 	  "variantId": "gid://shopify/ProductVariant/49042403721433",
-	// 	  "quantity": 1
-	// 	}
-	// ]
+func CreateCartAndCheckout(
+	ctx context.Context,
+	config *Config,
+	items []Item,
+	sessionID string,
+) (GraphQLResponse[CheckoutQueryResult], error) {
 
 	query := `
     mutation cartCreate($input: CartInput!) {
@@ -156,6 +127,10 @@ func CreateCartAndCheckout(config *Config, items []Item) GraphQLResponse[Checkou
                 id
                 checkoutUrl
                 totalQuantity
+				attributes {
+					key
+					value
+				}
             }
             userErrors {
                 field
@@ -177,29 +152,30 @@ func CreateCartAndCheckout(config *Config, items []Item) GraphQLResponse[Checkou
 	variables := map[string]any{
 		"input": map[string]any{
 			"lines": lines,
+
+			"attributes": []map[string]string{
+				{
+					"key":   "go_session_id",
+					"value": sessionID,
+				},
+			},
 		},
 	}
 
 	// Execute Storefront Request
-	body, err := sendStorefrontRequest(config, query, variables)
+	body, err := sendStorefrontRequest(ctx, config, query, variables)
 	if err != nil {
-		// http.Error(w, err.Error(), http.StatusInternalServerError)
-		// return
+		return GraphQLResponse[CheckoutQueryResult]{}, err
 	}
 
-	var graphQLResp GraphQLResponse[CheckoutQueryResult]
+	graphQLResp, err := parseGraphQL[CheckoutQueryResult](body)
 
-	if err := json.Unmarshal(body, &graphQLResp); err != nil {
-		fmt.Println("JSON Error:", err)
-		// return
+	if err != nil {
+		return graphQLResp, err
 	}
 
-	if len(graphQLResp.Errors) > 0 {
-		fmt.Println("GraphQL Errors:", graphQLResp.Errors)
-		// return
-	}
-
-	if config.Environment == "dev" {
+	if config.Environment == "dev" &&
+		graphQLResp.Data.CartCreate.Cart.CheckoutUrl != "" {
 		originalUrl := graphQLResp.Data.CartCreate.Cart.CheckoutUrl
 		separator := "?"
 		if strings.Contains(originalUrl, "?") {
@@ -208,15 +184,15 @@ func CreateCartAndCheckout(config *Config, items []Item) GraphQLResponse[Checkou
 		graphQLResp.Data.CartCreate.Cart.CheckoutUrl = originalUrl + separator + "channel=headless-storefronts"
 	}
 
-	return graphQLResp
+	return graphQLResp, nil
 }
 
-func sendAdminRequest(config *Config, query string, variables map[string]any) ([]byte, error) {
+func sendAdminRequest(ctx context.Context, config *Config, query string, variables map[string]any) ([]byte, error) {
 	accessHeader := HttpHeader{
 		Key:   "X-Shopify-Access-Token",
 		Value: config.ShopifyAdminToken,
 	}
-	res, err := sendGraphQLRequest(config.AdminEndpoint, accessHeader, query, variables)
+	res, err := sendGraphQLRequest(ctx, config.AdminEndpoint, accessHeader, query, variables)
 	if err != nil {
 		return nil, err
 	}
@@ -224,12 +200,12 @@ func sendAdminRequest(config *Config, query string, variables map[string]any) ([
 	return res, nil
 }
 
-func sendStorefrontRequest(config *Config, query string, variables map[string]any) ([]byte, error) {
+func sendStorefrontRequest(ctx context.Context, config *Config, query string, variables map[string]any) ([]byte, error) {
 	accessHeader := HttpHeader{
 		Key:   "X-Shopify-Storefront-Access-Token",
 		Value: config.ShopifyStorefrontToken,
 	}
-	res, err := sendGraphQLRequest(config.StorefrontEndpoint, accessHeader, query, variables)
+	res, err := sendGraphQLRequest(ctx, config.StorefrontEndpoint, accessHeader, query, variables)
 	if err != nil {
 		return nil, err
 	}
@@ -237,37 +213,66 @@ func sendStorefrontRequest(config *Config, query string, variables map[string]an
 	return res, nil
 }
 
-func sendGraphQLRequest(endpoint string, accessHeader HttpHeader, query string, variables map[string]any) ([]byte, error) {
-
+func sendGraphQLRequest(
+	ctx context.Context,
+	endpoint string,
+	accessHeader HttpHeader,
+	query string,
+	variables map[string]any,
+) ([]byte, error) {
 	payload := map[string]any{
 		"query":     query,
 		"variables": variables,
 	}
-	jsonData, err := json.Marshal(payload)
+
+	data, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("encode GraphQL request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, endpoint, bytes.NewReader(data),
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create Shopify request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(accessHeader.Key, accessHeader.Value)
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 10 * time.Second}
+
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error:", err)
-		return nil, err
+		return nil, fmt.Errorf("send Shopify request: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("Shopify returned HTTP %d", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read Shopify response: %w", err)
 	}
 
 	return body, nil
+}
+
+func parseGraphQL[T any](body []byte) (GraphQLResponse[T], error) {
+	var result GraphQLResponse[T]
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return result, fmt.Errorf("decode Shopify response: %w", err)
+	}
+
+	if len(result.Errors) > 0 {
+		return result, fmt.Errorf(
+			"Shopify GraphQL error: %s",
+			result.Errors[0].Message,
+		)
+	}
+
+	return result, nil
 }
