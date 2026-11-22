@@ -58,6 +58,10 @@ func GetEnv(key, fallback string) string {
 	return fallback
 }
 
+// FlattenGraphQLResponse is an experimental utility for exploring
+// recursive flattening of nested JSON-like maps.
+// It is not used by the current API and may discard information
+// when flattening arrays containing multiple objects.
 func FlattenGraphQLResponse(input map[string]any) map[string]any {
 	flattened := make(map[string]any)
 	flattenRecursive(input, "", flattened)
