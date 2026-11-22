@@ -135,3 +135,22 @@ func TestProductsReturnsEmptyArray(t *testing.T) {
 		t.Fatalf("expected [], got %q", resp.Body.String())
 	}
 }
+
+func TestWebhookBodySizeLimit(t *testing.T) {
+	s := testMarketplaceServer()
+
+	body := bytes.Repeat([]byte("x"), maxWebhookBodySize+1)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/shopify/webhook",
+		bytes.NewReader(body),
+	)
+
+	resp := httptest.NewRecorder()
+	s.HandleShopifyWebhook(resp, req)
+
+	if resp.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", resp.Code)
+	}
+}
