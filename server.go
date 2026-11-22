@@ -29,7 +29,8 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		config: cfg,
 		logger: logger,
 
-		sessions: make(map[string]*Session),
+		sessions:     make(map[string]*Session),
+		productCache: NewProductCache(60*time.Second, 128),
 	}
 
 	trustFlyProxy := GetEnv("TRUST_FLY_PROXY", "false") == "true"

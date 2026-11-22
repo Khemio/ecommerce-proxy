@@ -18,8 +18,9 @@ import (
 )
 
 func (s *MarketplaceServer) HandleHealthCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"operational"}`))
+	_, _ = w.Write([]byte(`{"status":"operational"}`))
 }
 
 func (s *MarketplaceServer) HandleFetchVendorProduct(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +64,8 @@ func (s *MarketplaceServer) HandleFetchVendorProducts(w http.ResponseWriter, r *
 		limit = parsed
 	}
 
-	graphQLResp, err := FetchProducts(r.Context(), &s.config, limit)
+	// graphQLResp, err := FetchProducts(r.Context(), &s.config, limit)
+	graphQLResp, err := s.fetchProductsCached(r.Context(), limit)
 	if err != nil {
 		s.logger.Printf("FetchProducts failed: %v", err)
 		http.Error(w, "Shopify request failed", http.StatusBadGateway)

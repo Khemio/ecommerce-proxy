@@ -21,8 +21,9 @@ type Config struct {
 
 // MarketplaceServer wraps dependencies cleanly for our API endpoints
 type MarketplaceServer struct {
-	config Config
-	logger *log.Logger
+	config       Config
+	logger       *log.Logger
+	productCache *ProductCache
 
 	sessionsMu sync.RWMutex
 	sessions   map[string]*Session
