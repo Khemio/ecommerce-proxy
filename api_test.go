@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -102,5 +103,35 @@ func TestProductsShopifyHTTPFailure(t *testing.T) {
 
 	if resp.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", resp.Code)
+	}
+}
+
+func TestProductsReturnsEmptyArray(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(
+				`{"data":{"products":{"edges":[]}}}`,
+			))
+		},
+	))
+	defer upstream.Close()
+
+	server := testMarketplaceServer()
+	server.config.StorefrontEndpoint = upstream.URL
+
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/products", nil,
+	)
+	resp := httptest.NewRecorder()
+
+	server.HandleFetchVendorProducts(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+
+	if strings.TrimSpace(resp.Body.String()) != "[]" {
+		t.Fatalf("expected [], got %q", resp.Body.String())
 	}
 }
