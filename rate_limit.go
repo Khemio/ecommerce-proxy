@@ -75,12 +75,6 @@ func (l *IPRateLimiter) allow(ip string) bool {
 
 func (l *IPRateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		// if err != nil {
-		// 	http.Error(w, "invalid remote address", http.StatusBadRequest)
-		// 	return
-		// }
-
 		ip, err := resolveClientIP(r, l.trustFlyProxy)
 		if err != nil {
 			http.Error(w, "invalid client address", http.StatusBadRequest)

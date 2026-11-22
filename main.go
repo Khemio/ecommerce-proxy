@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-	// shopify "github.com/r0busta/go-shopify-graphql/v9"
 )
 
 var version = "2026-07"

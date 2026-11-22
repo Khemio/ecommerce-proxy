@@ -74,7 +74,6 @@ type SSEEvent struct {
 	Data  any    `json:"data"`
 }
 
-// Temp struct 'YourSessionID' would be CartId
 type ShopifyOrderWebhook struct {
 	ID                 int64              `json:"id"`
 	AdminGraphQLID     string             `json:"admin_graphql_api_id"`
@@ -119,13 +118,11 @@ type Item struct {
 }
 
 type ProductConnection struct {
-	// Edges []ProductEdge `json:"edges"`
 	Edges []map[string]any `json:"edges"`
 }
 
 type QueryResult struct {
 	Products ProductConnection `json:"products"`
-	// Products map[string][]map[string]any `json:"products"`
 }
 
 type ProductQueryResult struct {
@@ -138,24 +135,17 @@ type CheckoutResponse struct {
 	Id          string              `json:"id"`
 	CheckoutUrl string              `json:"checkoutUrl"`
 	Quantity    int                 `json:"totalQuantity"`
-	Attributes  []map[string]string `json:"attributes"` //? Probably not necessary
+	Attributes  []map[string]string `json:"attributes"`
 }
 
-// type CheckoutAttributes struct {
-
-// }
-
-// TODOD: Find a better way to parse attributes
 type CartResult struct {
 	Id          string              `json:"id"`
 	CheckoutUrl string              `json:"checkoutUrl"`
 	Quantity    int                 `json:"totalQuantity"`
 	Attributes  []map[string]string `json:"attributes"`
-	// Attributes  CheckoutAttributes `json:"attributes"`
 }
 
 type CartCreateQueryResult struct {
-	// Cart       map[string]any `json:"cart"`
 	Cart       CartResult `json:"cart"`
 	UserErrors []struct {
 		Message string `json:"message"`

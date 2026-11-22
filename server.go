@@ -70,7 +70,6 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		),
 	)
 
-	// Webhooks might need slightly longer depending on processing, e.g., 30s
 	mux.Handle("POST /api/v1/shopify/webhook", withTimeout(4*time.Second, server.HandleShopifyWebhook))
 
 	mux.Handle(
@@ -81,8 +80,6 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 			),
 		),
 	)
-
-	// corsHandler := CorsMiddleware()
 
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
