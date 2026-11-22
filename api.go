@@ -208,12 +208,16 @@ func (s *MarketplaceServer) HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	if completedOrder != nil {
 		if err := writeSSEEvent(w, flusher, *completedOrder); err != nil {
-			s.logger.Printf("failed writing stored SSE event: %v", err)
+			s.logger.Printf("Failed writing stored SSE event: %v", err)
+			return
 		}
 
-		s.logger.Printf("Finished writing Completed Order to session: %s\n", sessionID)
-		s.deleteSession(sessionID)
+		s.logger.Printf(
+			"Completed order sent to session: %s",
+			sessionID,
+		)
 
+		s.deleteSession(sessionID)
 		return
 	}
 
@@ -332,9 +336,19 @@ func (s *MarketplaceServer) HandleShopifyWebhook(w http.ResponseWriter, r *http.
 
 	session.mu.Lock()
 
-	session.CompletedOrder = &event
+	if session.CompletedOrder != nil {
+		session.mu.Unlock()
+		s.logger.Printf(
+			"Order already recorded for session %s",
+			sessionID,
+		)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 
+	session.CompletedOrder = &event
 	session.mu.Unlock()
+
 	s.logger.Printf("order event created")
 
 	// Don't hold the mutex while potentially blocking.
