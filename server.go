@@ -32,14 +32,39 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		sessions: make(map[string]*Session),
 	}
 
+	trustFlyProxy := GetEnv("TRUST_FLY_PROXY", "false") == "true"
+
+	productLimiter := NewIPRateLimiter(time.Second, 10, 5000)
+	checkoutLimiter := NewIPRateLimiter(30*time.Second, 3, 5000)
+
+	productLimiter.trustFlyProxy = trustFlyProxy
+	checkoutLimiter.trustFlyProxy = trustFlyProxy
+
 	// Multiplex routes cleanly using standard library features
 	mux := http.NewServeMux()
 
 	// Regular HTTP endpoints get a strict 15-second cutoff
 	mux.Handle("GET /api/v1/health", withTimeout(15*time.Second, server.HandleHealthCheck))
-	mux.Handle("GET /api/v1/products", withTimeout(15*time.Second, server.HandleFetchVendorProducts))
-	mux.Handle("GET /api/v1/product/{product_id}", withTimeout(15*time.Second, server.HandleFetchVendorProduct))
-	mux.Handle("POST /api/v1/checkout", withTimeout(15*time.Second, server.HandleCheckout))
+	mux.Handle(
+		"GET /api/v1/products",
+		productLimiter.Middleware(
+			withTimeout(15*time.Second, server.HandleFetchVendorProducts),
+		),
+	)
+
+	mux.Handle(
+		"GET /api/v1/product/{product_id}",
+		productLimiter.Middleware(
+			withTimeout(15*time.Second, server.HandleFetchVendorProduct),
+		),
+	)
+
+	mux.Handle(
+		"POST /api/v1/checkout",
+		checkoutLimiter.Middleware(
+			withTimeout(15*time.Second, server.HandleCheckout),
+		),
+	)
 
 	// Webhooks might need slightly longer depending on processing, e.g., 30s
 	mux.Handle("POST /api/v1/shopify/webhook", withTimeout(4*time.Second, server.HandleShopifyWebhook))
