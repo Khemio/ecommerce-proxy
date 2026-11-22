@@ -124,6 +124,7 @@ type ProductConnection struct {
 
 type QueryResult struct {
 	Products ProductConnection `json:"products"`
+	// Products map[string][]map[string]any `json:"products"`
 }
 
 type ProductQueryResult struct {

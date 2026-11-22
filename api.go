@@ -29,7 +29,18 @@ func (s *MarketplaceServer) HandleFetchVendorProduct(w http.ResponseWriter, r *h
 		return
 	}
 
-	var graphQLResp GraphQLResponse[ProductQueryResult] = FetchProduct(&s.config, productId)
+	graphQLResp, err := FetchProduct(r.Context(), &s.config, productId)
+	if err != nil {
+		s.logger.Printf("FetchProduct failed: %v", err)
+		http.Error(w, "Shopify request failed", http.StatusBadGateway)
+		return
+	}
+
+	if graphQLResp.Data.Product == nil {
+		http.Error(w, "Product not found", http.StatusNotFound)
+		return
+	}
+
 	product := TransformGraphQLResponse(graphQLResp.Data.Product).(map[string]any)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -41,17 +52,28 @@ func (s *MarketplaceServer) HandleFetchVendorProduct(w http.ResponseWriter, r *h
 
 func (s *MarketplaceServer) HandleFetchVendorProducts(w http.ResponseWriter, r *http.Request) {
 	limit := 10
-	if s := r.URL.Query().Get("limit"); s != "" {
-		if i, err := strconv.Atoi(s); err == nil {
-			limit = i
+
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			http.Error(w, "limit must be between 1 and 100", http.StatusBadRequest)
+			return
 		}
+		limit = parsed
 	}
 
-	if l := r.URL.Query().Get("limit"); l != "" {
-		fmt.Sscanf(l, "%d", &limit)
+	graphQLResp, err := FetchProducts(r.Context(), &s.config, limit)
+	if err != nil {
+		s.logger.Printf("FetchProducts failed: %v", err)
+		http.Error(w, "Shopify request failed", http.StatusBadGateway)
+		return
 	}
 
-	var graphQLResp GraphQLResponse[QueryResult] = FetchProducts(&s.config, limit)
+	// if graphQLResp.Data.Products.Edges == nil ||
+	if len(graphQLResp.Data.Products.Edges) == 0 {
+		http.Error(w, "No products were found", http.StatusNotFound)
+		return
+	}
 
 	for i := range graphQLResp.Data.Products.Edges {
 		edge := &graphQLResp.Data.Products.Edges[i]
@@ -92,11 +114,17 @@ func (s *MarketplaceServer) HandleCheckout(w http.ResponseWriter, r *http.Reques
 
 	sessionID := uuid.NewString()
 
-	graphQLResp := CreateCartAndCheckout(
+	graphQLResp, err := CreateCartAndCheckout(
+		r.Context(),
 		&s.config,
 		items,
 		sessionID,
 	)
+	if err != nil {
+		s.logger.Printf("CreateCartAndCheckout failed: %v", err)
+		http.Error(w, "Shopify request failed", http.StatusBadGateway)
+		return
+	}
 
 	cart := graphQLResp.Data.CartCreate.Cart
 	if len(graphQLResp.Errors) > 0 || len(graphQLResp.Data.CartCreate.UserErrors) > 0 || cart.Id == "" || cart.CheckoutUrl == "" {
