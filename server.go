@@ -20,8 +20,8 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 		ShopifyStorefrontToken: GetEnv("SHOPIFY_STOREFRONT_TOKEN", "store-front-token"),
 		ShopifySecretToken:     GetEnv("SHOPIFY_SECRET_TOKEN", "secret-token"),
 	}
-	cfg.AdminEndpoint = fmt.Sprintf("https://%s.myshopify.com/admin/api/%s/graphql.json", cfg.ShopifyDomain, version)
-	cfg.StorefrontEndpoint = fmt.Sprintf("https://%s.myshopify.com/api/%s/graphql.json", cfg.ShopifyDomain, version)
+	cfg.AdminEndpoint = fmt.Sprintf("https://%s.myshopify.com/admin/api/%s/graphql.json", cfg.ShopifyDomain, cfg.APIVersion)
+	cfg.StorefrontEndpoint = fmt.Sprintf("https://%s.myshopify.com/api/%s/graphql.json", cfg.ShopifyDomain, cfg.APIVersion)
 
 	logger.Printf("Server will start on port %s...", cfg.Port)
 
@@ -42,7 +42,7 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 	mux.Handle("POST /api/v1/checkout", withTimeout(15*time.Second, server.HandleCheckout))
 
 	// Webhooks might need slightly longer depending on processing, e.g., 30s
-	mux.Handle("POST /api/v1/shopify/webhook", withTimeout(30*time.Second, server.HandleShopifyWebhook))
+	mux.Handle("POST /api/v1/shopify/webhook", withTimeout(4*time.Second, server.HandleShopifyWebhook))
 
 	mux.HandleFunc("GET /api/v1/events", server.HandleSSE)
 
