@@ -1,48 +1,92 @@
 # Architecture and implementation notes
 
-## Request flow
+## Scope
+
+The service is a small Go `net/http` integration layer between a Flutter storefront and Shopify. It is designed as a working prototype for modest traffic, with in-process state and no database, message broker, or custom reverse proxy. Shopify hosts checkout and handles payment.
+
+## Component flow
 
 ```text
-Flutter (HTTP/JSON)
-  -> Go net/http ServeMux
-     -> LoggingMiddleware -> CorsMiddleware
-        -> REST handler (api.go)
-           -> Shopify function (shopify.go)
-              -> GraphQL POST to Shopify Storefront API
-           -> GraphQL edge/node transformation
-        -> JSON response
+               Flutter storefront
+                |             ^
+        REST/JSON|             |SSE (order.created)
+                v             |
+       Go http.ServeMux --- session map / event channels
+        |      |   |                     ^
+        |      |   +-- rate limits ------|
+        |      +------ catalog cache (TTL + singleflight)
+        |                                |
+        +-- Storefront GraphQL --> Shopify API
+                                         |
+                     Shopify order webhook
+                       (verified HMAC)
+                              |
+                   webhook handler -> session/event
 ```
 
-All registered public handlers use the Storefront API. `sendAdminRequest` and the Admin token/endpoint exist in the code but are not used by these handlers.
+### Source files
 
-## Responsibilities
+- `main.go`: signal handling, server lifecycle and 5-second graceful-shutdown deadline; starts periodic session cleanup.
+- `server.go`: environment variables, Shopify URLs, route registration, middleware and server timeouts.
+- `api.go`: product/checkout REST endpoints, SSE streaming, HMAC-verified webhook handling.
+- `shopify.go`: Storefront GraphQL queries and cart mutation, HTTP client and error propagation.
+- `types.go`, `utils.go`: shared models, product/variant ID normalization, GraphQL node transformation, CORS and access logging.
+- `session.go`, `session_cleanup.go`: mutex-protected in-memory sessions, expiry and cleanup.
+- `rate_limit.go`, `sse_limit.go`: per-IP token buckets and connection-count limits.
+- `product_cache.go`: bounded in-memory catalog response cache with `singleflight`.
 
-- `main.go`: starts `http.Server` in a goroutine, waits for SIGINT/SIGTERM and attempts a graceful shutdown with a five-second deadline.
-- `server.go`: reads environment variables, creates `MarketplaceServer`, registers four routes, configures CORS/logging middleware and server timeouts (15-second read/write, 60-second idle).
-- `api.go`: parses request parameters and checkout JSON, calls Shopify helpers, transforms and serializes results.
-- `shopify.go`: builds product list/detail GraphQL queries and `cartCreate` mutation, attaches the Storefront token, and performs HTTP POST requests.
-- `types.go`: models input line items, Shopify response envelopes and service configuration.
-- `utils.go`: normalizes ProductVariant IDs; removes GraphQL `edges`/`node` wrappers; handles CORS and access logging.
+## Product listing and cache
 
-## Data mapping
+`GET /api/v1/products` validates `limit` in the range 1–100, then calls `fetchProductsCached` with the key `catalog:<limit>`. The Shopify response envelope is serialized into cache bytes and decoded independently for each caller, avoiding shared mutable product maps. `TransformGraphQLResponse` removes `edges`/`node` wrappers before the final REST JSON array is returned. An empty catalog is `200 []`.
 
-Shopify connections typically contain `edges: [{node: {...}}]`. `TransformGraphQLResponse` converts such structures into arrays of the underlying nodes. This is used to simplify the output shape expected by the Flutter client.
+Cache behavior:
 
-The product query only asks Shopify for the first variant and first image, so this is not a full catalog/variant API. Product listing currently requests a first page without cursor-based pagination.
+- TTL: **60 seconds**; max **128 entries**; no entry larger than **256 KiB**.
+- Successful complete catalog responses only. Missing `products.edges`, upstream failures and GraphQL failures do not populate cache.
+- Concurrent misses for a key are coalesced by `singleflight`. Cache waiters can cancel their HTTP request independently of shared bounded upstream work.
+- Simple earliest-expiration eviction when full. No persistent storage, cross-instance synchronization, explicit product-update invalidation or hit/miss metrics yet.
+- `GET /api/v1/product/{product_id}` currently bypasses the cache.
 
-## Operational notes
+The product queries intentionally request only the first variant and first image, rather than full cursor-based pagination.
 
-- `SHOPIFY_STORE_NAME` becomes the `<store>.myshopify.com` host. Build endpoint URLs carefully and validate configuration.
-- `SHOPIFY_API_VERSION` is stored on `Config`, but endpoint URLs use the package-level `version` instead. This is a configuration bug.
-- `ENV=dev` modifies the checkout URL by adding `channel=headless-storefronts`.
-- `CorsMiddleware` allows `*` origins and broad request methods/headers.
-- `LoggingMiddleware` records remote address, method, path and elapsed time, but not status codes or request IDs.
-- Outbound requests create a fresh `http.Client` and omit explicit timeouts/context propagation.
-- Shopify HTTP error status codes, GraphQL `errors` and cart `userErrors` do not currently propagate to appropriate REST error responses.
-- There are currently no test files in the repository.
+## Checkout, webhooks and SSE
 
-## Suggested boundaries as the application grows
+1. `POST /api/v1/checkout` validates 1–100 lines, positive quantities and nonempty variant IDs (1 MiB body limit).
+2. The server generates a UUID, includes it as Shopify cart attribute `go_session_id`, calls `cartCreate`, and only records the session after a usable cart and checkout URL are returned.
+3. Flutter retains `sessionId` and opens `GET /api/v1/events?sessionId=...`; the server sends a connection comment and heartbeat comments every 15 seconds.
+4. Shopify sends an order webhook. The server limits the request body to 4 MiB, verifies its HMAC, parses `note_attributes`, and locates the matching session.
+5. Under the session mutex, the handler records only the first completed order event; it then attempts a nonblocking send into a capacity-one event channel. The stored event handles the webhook-before-subscription case.
+6. The SSE handler writes the `order.created` event and deletes the session after a successful write. A disconnect without successful delivery leaves the session available for reconnect until cleanup.
 
-Introduce a Shopify client/interface for HTTP transport and GraphQL operations, typed DTOs for REST requests/responses, a consistent API error type, and independent handler tests using `httptest`. Keep cart/checkout business rules out of HTTP handlers.
+**Delivery contract:** This is a best-effort, single-process notification path, not a durable, exactly-once event system. An SSE write succeeding does not guarantee that the Flutter application consumed the event. Multiple simultaneous listeners for one session are not supported as a reliable broadcast, and a process restart destroys sessions and queued events. The session ID must be kept private; no additional user authentication is enforced on event subscriptions.
 
-This is a suggested future direction, not the implemented architecture.
+**Order versus payment:** The event name is `order.created`, reflecting an order notification, and does not prove the order is paid. If the Flutter UI needs paid-order confirmation, the subscribed Shopify topic/fields and client state transition must be updated accordingly.
+
+## Abuse controls
+
+- The product list/detail endpoints share one per-IP token bucket: **1 request/second**, burst **10**.
+- Checkout has a separate per-IP token bucket: **1 request/30 seconds**, burst **3**.
+- Each bucket retains at most **5,000** IP entries, removing entries inactive for more than 30 minutes during request-triggered cleanup.
+- SSE is limited to **50 active streams globally** and **5 per client IP**. Connection permits are released on handler return.
+- Ordinary request/checkout limits are skipped for health and webhook endpoints. The webhook is protected by HMAC verification and a body-size limit.
+- IP identity uses `RemoteAddr` unless `TRUST_FLY_PROXY=true` explicitly enables the `Fly-Client-IP` header. A directly accessible listener must not trust client-supplied proxy headers.
+
+All of these limits exist per running process; they are not a DDoS defense or a distributed quota system. Shared NAT addresses can cause independent users to share a limit.
+
+## Networking and lifecycle
+
+- Ordinary route handlers use a 15-second `http.TimeoutHandler`; webhook handler uses 4 seconds; SSE is excluded from those short timeouts.
+- Shopify outbound HTTP requests use request contexts and a 10-second client timeout. Non-2xx statuses, GraphQL envelope errors, and JSON decoding errors propagate to handlers.
+- `http.Server` has a 5-second read timeout and 60-second idle timeout; SSE streams can remain open until disconnect, expiry of the process, or event completion.
+- Sessions expire after **2 hours**; a cleanup task runs approximately every **10 minutes**. Entries are in memory and are not synchronized between replicas.
+- Wildcard CORS is currently enabled; the service does not implement client authentication or a uniform JSON error schema.
+
+## Deployment implications
+
+The repository includes a minimal Docker runtime and `fly.toml`. The current `fly.toml` permits machine auto-stopping with `min_machines_running=0`, which can invalidate in-memory sessions. For dependable checkout notifications, run a single continuously available instance or introduce shared state. Review the Fly settings and potential hosting costs before applying changes.
+
+The checked-in Fly configuration sets `PORT=8080` but Go reads `SERVER_PORT` (also defaults to `8080`). Its `GO_VERSION` build argument is stale and unused by the current Dockerfile. Deployment credentials must be supplied as secrets. Fly client-IP resolution must only be enabled when the inbound path is restricted to trusted Fly Proxy.
+
+## Test strategy
+
+Local `httptest` integration tests cover input validation, upstream errors, an empty catalog, signed/unsigned webhooks, SSE arrival ordering/reconnects, session expiry and duplicate events, request limits, connection caps, cache hits/failures, expiry, eviction, and concurrent misses. Repeated `-race` runs exercise concurrent paths. The tests are primarily local and mock Shopify; they do not verify live Shopify subscriptions, paid-order semantics, or a deployed multi-instance topology.
