@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -247,5 +248,78 @@ func TestSSEReconnectAfterDisconnect(t *testing.T) {
 
 	if _, exists := s.getSession(sessionID); exists {
 		t.Fatal("session should be removed after event delivery")
+	}
+}
+
+func TestDuplicateWebhookPreservesFirstOrder(t *testing.T) {
+	s := testMarketplaceServer()
+	sessionID := "duplicate-test"
+	addTestSession(s, sessionID)
+
+	// First delivery stores order 42.
+	deliverTestWebhook(t, s, sessionID)
+
+	// Second delivery claims a different order for the same session.
+	body := []byte(fmt.Sprintf(`{
+        "id": 43,
+        "note_attributes": [
+            {"name": "go_session_id", "value": %q}
+        ]
+    }`, sessionID))
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/shopify/webhook",
+		bytes.NewReader(body),
+	)
+	req.Header.Set(
+		"X-Shopify-Hmac-Sha256",
+		signWebhook(body, s.config.ShopifySecretToken),
+	)
+
+	resp := httptest.NewRecorder()
+	s.HandleShopifyWebhook(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+
+	session, exists := s.getSession(sessionID)
+	if !exists {
+		t.Fatal("session disappeared")
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	order, ok := session.CompletedOrder.Data.(OrderEvent)
+	if !ok || order.OrderID != "42" {
+		t.Fatal("duplicate webhook replaced the first order")
+	}
+
+	if len(session.Events) != 1 {
+		t.Fatal("expected exactly one queued event")
+	}
+}
+
+func TestSessionCleanup(t *testing.T) {
+	s := testMarketplaceServer()
+
+	s.saveSession(&Session{
+		ID:        "expired",
+		CreatedAt: time.Now().Add(-sessionTTL - time.Minute),
+		Events:    make(chan SSEEvent, 1),
+	})
+
+	addTestSession(s, "active")
+
+	s.cleanupSessions()
+
+	if _, exists := s.getSession("expired"); exists {
+		t.Fatal("expired session was not removed")
+	}
+
+	if _, exists := s.getSession("active"); !exists {
+		t.Fatal("active session was incorrectly removed")
 	}
 }
