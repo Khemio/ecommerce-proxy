@@ -260,12 +260,12 @@ func TestDuplicateWebhookPreservesFirstOrder(t *testing.T) {
 	deliverTestWebhook(t, s, sessionID)
 
 	// Second delivery claims a different order for the same session.
-	body := []byte(fmt.Sprintf(`{
+	body := fmt.Appendf(nil, `{
         "id": 43,
         "note_attributes": [
             {"name": "go_session_id", "value": %q}
         ]
-    }`, sessionID))
+    }`, sessionID)
 
 	req := httptest.NewRequest(
 		http.MethodPost,

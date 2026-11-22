@@ -40,6 +40,9 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 	productLimiter.trustFlyProxy = trustFlyProxy
 	checkoutLimiter.trustFlyProxy = trustFlyProxy
 
+	sseLimiter := NewSSEConnectionLimiter(50)
+	ssePerIPLimiter := NewSSEPerIPLimiter(5, trustFlyProxy)
+
 	// Multiplex routes cleanly using standard library features
 	mux := http.NewServeMux()
 
@@ -69,7 +72,14 @@ func MakeServer() (*http.Server, *MarketplaceServer) {
 	// Webhooks might need slightly longer depending on processing, e.g., 30s
 	mux.Handle("POST /api/v1/shopify/webhook", withTimeout(4*time.Second, server.HandleShopifyWebhook))
 
-	mux.HandleFunc("GET /api/v1/events", server.HandleSSE)
+	mux.Handle(
+		"GET /api/v1/events",
+		sseLimiter.Middleware(
+			ssePerIPLimiter.Middleware(
+				http.HandlerFunc(server.HandleSSE),
+			),
+		),
+	)
 
 	// corsHandler := CorsMiddleware()
 
